@@ -30,14 +30,36 @@ class CommandResult:
     returncode: int
 
 
+def command_not_found_hint(cmd_name: str) -> str:
+    hints = {
+        "xray": "install xray first (or remove --skip-install-xray).",
+        "systemctl": "systemctl is unavailable; this script requires a systemd-based Linux host.",
+        "apt": "apt not found; verify distro detection or use --distro-id/--distro-like overrides.",
+        "dnf": "dnf not found; verify distro detection or use --distro-id/--distro-like overrides.",
+        "pacman": "pacman not found; verify distro detection or use --distro-id/--distro-like overrides.",
+        "sysctl": "install procps/procps-ng package to provide sysctl.",
+        "hostname": "install the hostname utility package and retry.",
+    }
+    return hints.get(cmd_name, "install the required command and retry.")
+
+
 def run_cmd(cmd, check: bool = True, shell: bool = False) -> CommandResult:
-    proc = subprocess.run(
-        cmd,
-        shell=shell,
-        text=True,
-        capture_output=True,
-        executable="/bin/bash" if shell else None,
-    )
+    try:
+        proc = subprocess.run(
+            cmd,
+            shell=shell,
+            text=True,
+            capture_output=True,
+            executable="/bin/bash" if shell else None,
+        )
+    except FileNotFoundError as exc:
+        cmd_name = cmd if shell else cmd[0]
+        if check:
+            if shell:
+                raise DeploymentError(f"command not found while running shell command: {cmd_name}") from exc
+            hint = command_not_found_hint(cmd_name)
+            raise DeploymentError(f"command not found: {cmd_name}. {hint}") from exc
+        return CommandResult("", str(exc), 127)
     if check and proc.returncode != 0:
         raise DeploymentError(
             f"command failed: {cmd}\nexit={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
@@ -216,6 +238,17 @@ def maybe_run(cmd, *, dry_run: bool, shell: bool = False, check: bool = True) ->
     return run_cmd(cmd, check=check, shell=shell)
 
 
+def warn_optional_failure(step: str, cmd, result: CommandResult) -> None:
+    if result.returncode == 0:
+        return
+    shown = cmd if isinstance(cmd, str) else " ".join(cmd)
+    if result.returncode == 127:
+        print(f"[warn] optional step skipped ({step}): command not found -> {shown}")
+        return
+    detail = result.stderr or result.stdout or f"exit={result.returncode}"
+    print(f"[warn] optional step failed ({step}): {detail}")
+
+
 def detect_server_ip(dry_run: bool) -> str:
     if dry_run:
         return "<SERVER_IP>"
@@ -309,9 +342,12 @@ def deploy(args) -> None:
     if not args.skip_firewall:
         firewall_cmd = get_firewall_open_command(distro_id, distro_like, args.port)
         if firewall_cmd is not None:
-            maybe_run(firewall_cmd, dry_run=args.dry_run, check=False)
+            firewall_res = maybe_run(firewall_cmd, dry_run=args.dry_run, check=False)
+            warn_optional_failure("open firewall port", firewall_cmd, firewall_res)
             if firewall_cmd[0] == "firewall-cmd":
-                maybe_run(["firewall-cmd", "--reload"], dry_run=args.dry_run, check=False)
+                reload_cmd = ["firewall-cmd", "--reload"]
+                reload_res = maybe_run(reload_cmd, dry_run=args.dry_run, check=False)
+                warn_optional_failure("reload firewalld", reload_cmd, reload_res)
 
     maybe_run(["xray", "-test", "-config", args.config_path], dry_run=args.dry_run)
     maybe_run(["systemctl", "enable", "xray"], dry_run=args.dry_run)

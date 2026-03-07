@@ -1,6 +1,11 @@
+import io
 import unittest
+from contextlib import redirect_stdout
 
 from reality_installer import (
+    CommandResult,
+    command_not_found_hint,
+    DeploymentError,
     build_xray_config,
     get_firewall_open_command,
     get_sysctl_apply_command,
@@ -8,6 +13,8 @@ from reality_installer import (
     get_upgrade_commands,
     parse_os_release_text,
     parse_x25519_output,
+    run_cmd,
+    warn_optional_failure,
 )
 
 
@@ -88,6 +95,48 @@ class DistroAdapterTests(unittest.TestCase):
     def test_sysctl_apply_arch(self):
         cmd = get_sysctl_apply_command("arch", "")
         self.assertEqual(cmd, ["sysctl", "--system"])
+
+
+class RunCommandBehaviorTests(unittest.TestCase):
+    def test_run_cmd_missing_binary_with_check_false_returns_nonzero_result(self):
+        result = run_cmd(["definitely-not-a-real-command-123"], check=False)
+        self.assertEqual(result.returncode, 127)
+        self.assertEqual(result.stdout, "")
+
+    def test_run_cmd_missing_binary_with_check_true_raises_deployment_error(self):
+        with self.assertRaises(DeploymentError):
+            run_cmd(["definitely-not-a-real-command-123"], check=True)
+
+    def test_run_cmd_missing_xray_includes_install_hint(self):
+        with self.assertRaisesRegex(DeploymentError, r"install xray first"):
+            run_cmd(["xray", "-test", "-config", "/tmp/xray.json"], check=True)
+
+    def test_command_not_found_hint_for_systemctl(self):
+        self.assertIn("systemd-based Linux", command_not_found_hint("systemctl"))
+
+
+class OptionalStepWarningTests(unittest.TestCase):
+    def test_warn_optional_failure_for_missing_command(self):
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            warn_optional_failure(
+                "open firewall port",
+                ["ufw", "allow", "443/tcp"],
+                CommandResult("", "missing", 127),
+            )
+        self.assertIn("optional step skipped", buffer.getvalue())
+        self.assertIn("command not found", buffer.getvalue())
+
+    def test_warn_optional_failure_for_nonzero_exit(self):
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            warn_optional_failure(
+                "reload firewalld",
+                ["firewall-cmd", "--reload"],
+                CommandResult("", "firewalld not running", 1),
+            )
+        self.assertIn("optional step failed", buffer.getvalue())
+        self.assertIn("firewalld not running", buffer.getvalue())
 
 
 if __name__ == "__main__":
