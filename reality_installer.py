@@ -230,12 +230,27 @@ def ensure_sysctl_line(path: Path, key: str, value: str, dry_run: bool) -> None:
         f.write(expected + "\n")
 
 
-def maybe_run(cmd, *, dry_run: bool, shell: bool = False, check: bool = True) -> CommandResult:
+def maybe_run(
+    cmd,
+    *,
+    dry_run: bool,
+    shell: bool = False,
+    check: bool = True,
+    verbose: bool = False,
+) -> CommandResult:
+    shown = cmd if shell else " ".join(cmd)
     if dry_run:
-        shown = cmd if shell else " ".join(cmd)
         print(f"[dry-run] {shown}")
         return CommandResult("", "", 0)
-    return run_cmd(cmd, check=check, shell=shell)
+    if verbose:
+        print(f"[run] {shown}")
+    result = run_cmd(cmd, check=check, shell=shell)
+    if verbose:
+        if result.stdout:
+            print(f"[stdout] {result.stdout}")
+        if result.stderr:
+            print(f"[stderr] {result.stderr}")
+    return result
 
 
 def warn_optional_failure(step: str, cmd, result: CommandResult) -> None:
@@ -244,9 +259,13 @@ def warn_optional_failure(step: str, cmd, result: CommandResult) -> None:
     shown = cmd if isinstance(cmd, str) else " ".join(cmd)
     if result.returncode == 127:
         print(f"[warn] optional step skipped ({step}): command not found -> {shown}")
+        if "firewall" in step:
+            print("[warn] firewall rules may be unchanged; verify network reachability on port 443.")
         return
     detail = result.stderr or result.stdout or f"exit={result.returncode}"
     print(f"[warn] optional step failed ({step}): {detail}")
+    if "firewall" in step:
+        print("[warn] firewall rules may be unchanged; verify network reachability on port 443.")
 
 
 def detect_server_ip(dry_run: bool) -> str:
@@ -266,7 +285,7 @@ def ensure_xray_installed(args) -> None:
         return
     if args.skip_install_xray:
         raise DeploymentError("xray not found and --skip-install-xray is set")
-    maybe_run(XRAY_INSTALL_COMMAND, dry_run=args.dry_run, shell=True)
+    maybe_run(XRAY_INSTALL_COMMAND, dry_run=args.dry_run, shell=True, verbose=args.verbose)
 
 
 def setup_bbr(args, distro_id: str, distro_like: str) -> None:
@@ -275,7 +294,7 @@ def setup_bbr(args, distro_id: str, distro_like: str) -> None:
     sysctl_conf = Path(get_sysctl_path(distro_id, distro_like))
     ensure_sysctl_line(sysctl_conf, "net.core.default_qdisc", "fq", args.dry_run)
     ensure_sysctl_line(sysctl_conf, "net.ipv4.tcp_congestion_control", "bbr", args.dry_run)
-    maybe_run(get_sysctl_apply_command(distro_id, distro_like), dry_run=args.dry_run)
+    maybe_run(get_sysctl_apply_command(distro_id, distro_like), dry_run=args.dry_run, verbose=args.verbose)
 
 
 def write_config(path: Path, config: dict, dry_run: bool) -> None:
@@ -287,11 +306,38 @@ def write_config(path: Path, config: dict, dry_run: bool) -> None:
     path.write_text(rendered, encoding="utf-8")
 
 
+def print_client_profile(
+    *,
+    server_ip: str,
+    port: int,
+    uuid: str,
+    server_name: str,
+    public_key: str,
+    short_id: str,
+    config_path: str,
+    config_written: str,
+) -> None:
+    print("\n=== CLIENT PROFILE ===")
+    print(f"Protocol: VLESS")
+    print(f"Address: {server_ip}")
+    print(f"Port: {port}")
+    print(f"UUID: {uuid}")
+    print("Flow: xtls-rprx-vision")
+    print("TLS: reality")
+    print(f"SNI: {server_name}")
+    print(f"PublicKey: {public_key}")
+    print(f"ShortId: {short_id}")
+    print("Fingerprint: chrome")
+    print(f"ConfigPath: {config_path}")
+    print(f"ConfigWritten: {config_written}")
+    print("\n[IMPORTANT] 请务必将这些信息妥善保存，客户端连接时需要用到。")
+
+
 def gather_identity(args) -> tuple[str, str, str, str]:
     if args.uuid:
         uuid = args.uuid
     else:
-        uuid = maybe_run(["xray", "uuid"], dry_run=args.dry_run).stdout or "<UUID>"
+        uuid = maybe_run(["xray", "uuid"], dry_run=args.dry_run, verbose=args.verbose).stdout or "<UUID>"
 
     if args.private_key and args.public_key:
         private_key = args.private_key
@@ -299,7 +345,7 @@ def gather_identity(args) -> tuple[str, str, str, str]:
     elif args.private_key or args.public_key:
         raise DeploymentError("private-key and public-key must be provided together")
     else:
-        key_output = maybe_run(["xray", "x25519"], dry_run=args.dry_run).stdout
+        key_output = maybe_run(["xray", "x25519"], dry_run=args.dry_run, verbose=args.verbose).stdout
         if args.dry_run:
             private_key = "<PRIVATE_KEY>"
             public_key = "<PUBLIC_KEY>"
@@ -318,7 +364,7 @@ def deploy(args) -> None:
 
     if not args.skip_upgrade:
         for cmd in get_upgrade_commands(distro_id, distro_like):
-            maybe_run(cmd, dry_run=args.dry_run)
+            maybe_run(cmd, dry_run=args.dry_run, verbose=args.verbose)
 
     setup_bbr(args, distro_id, distro_like)
     ensure_xray_installed(args)
@@ -342,30 +388,30 @@ def deploy(args) -> None:
     if not args.skip_firewall:
         firewall_cmd = get_firewall_open_command(distro_id, distro_like, args.port)
         if firewall_cmd is not None:
-            firewall_res = maybe_run(firewall_cmd, dry_run=args.dry_run, check=False)
+            firewall_res = maybe_run(firewall_cmd, dry_run=args.dry_run, check=False, verbose=args.verbose)
             warn_optional_failure("open firewall port", firewall_cmd, firewall_res)
             if firewall_cmd[0] == "firewall-cmd":
                 reload_cmd = ["firewall-cmd", "--reload"]
-                reload_res = maybe_run(reload_cmd, dry_run=args.dry_run, check=False)
+                reload_res = maybe_run(reload_cmd, dry_run=args.dry_run, check=False, verbose=args.verbose)
                 warn_optional_failure("reload firewalld", reload_cmd, reload_res)
 
-    maybe_run(["xray", "-test", "-config", args.config_path], dry_run=args.dry_run)
-    maybe_run(["systemctl", "enable", "xray"], dry_run=args.dry_run)
-    maybe_run(["systemctl", "restart", "xray"], dry_run=args.dry_run)
+    maybe_run(["xray", "-test", "-config", args.config_path], dry_run=args.dry_run, verbose=args.verbose)
+    maybe_run(["systemctl", "enable", "xray"], dry_run=args.dry_run, verbose=args.verbose)
+    maybe_run(["systemctl", "restart", "xray"], dry_run=args.dry_run, verbose=args.verbose)
 
     server_ip = args.server_ip or detect_server_ip(args.dry_run)
+    config_written = "dry-run" if args.dry_run else ("yes" if Path(args.config_path).exists() else "no")
 
-    print("\n=== CLIENT PROFILE ===")
-    print(f"Protocol: VLESS")
-    print(f"Address: {server_ip}")
-    print(f"Port: {args.port}")
-    print(f"UUID: {uuid}")
-    print("Flow: xtls-rprx-vision")
-    print("TLS: reality")
-    print(f"SNI: {args.server_name}")
-    print(f"PublicKey: {public_key}")
-    print(f"ShortId: {short_id}")
-    print("Fingerprint: chrome")
+    print_client_profile(
+        server_ip=server_ip,
+        port=args.port,
+        uuid=uuid,
+        server_name=args.server_name,
+        public_key=public_key,
+        short_id=short_id,
+        config_path=args.config_path,
+        config_written=config_written,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -403,6 +449,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument("--dry-run", action="store_true", help="print actions only")
+    parser.add_argument("--verbose", action="store_true", help="print command execution details")
     parser.add_argument("--print-config", action="store_true", help="print generated config")
     return parser
 

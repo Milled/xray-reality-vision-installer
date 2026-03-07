@@ -4,6 +4,7 @@ from contextlib import redirect_stdout
 
 from reality_installer import (
     CommandResult,
+    build_parser,
     command_not_found_hint,
     DeploymentError,
     build_xray_config,
@@ -13,6 +14,7 @@ from reality_installer import (
     get_upgrade_commands,
     parse_os_release_text,
     parse_x25519_output,
+    print_client_profile,
     run_cmd,
     warn_optional_failure,
 )
@@ -126,6 +128,7 @@ class OptionalStepWarningTests(unittest.TestCase):
             )
         self.assertIn("optional step skipped", buffer.getvalue())
         self.assertIn("command not found", buffer.getvalue())
+        self.assertIn("firewall rules may be unchanged", buffer.getvalue())
 
     def test_warn_optional_failure_for_nonzero_exit(self):
         buffer = io.StringIO()
@@ -137,6 +140,33 @@ class OptionalStepWarningTests(unittest.TestCase):
             )
         self.assertIn("optional step failed", buffer.getvalue())
         self.assertIn("firewalld not running", buffer.getvalue())
+        self.assertIn("firewall rules may be unchanged", buffer.getvalue())
+
+
+class ClientProfileOutputTests(unittest.TestCase):
+    def test_print_client_profile_includes_config_path_and_save_reminder(self):
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            print_client_profile(
+                server_ip="1.2.3.4",
+                port=443,
+                uuid="u-1",
+                server_name="www.microsoft.com",
+                public_key="pub",
+                short_id="6baad05011122233",
+                config_path="/usr/local/etc/xray/config.json",
+                config_written="yes",
+            )
+        output = buffer.getvalue()
+        self.assertIn("ConfigPath: /usr/local/etc/xray/config.json", output)
+        self.assertIn("ConfigWritten: yes", output)
+        self.assertIn("请务必将这些信息妥善保存，客户端连接时需要用到。", output)
+
+
+class ParserTests(unittest.TestCase):
+    def test_parser_accepts_verbose_flag(self):
+        args = build_parser().parse_args(["--verbose"])
+        self.assertTrue(args.verbose)
 
 
 if __name__ == "__main__":
