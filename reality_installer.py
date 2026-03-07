@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import json
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -306,6 +308,63 @@ def write_config(path: Path, config: dict, dry_run: bool) -> None:
     path.write_text(rendered, encoding="utf-8")
 
 
+def summarize_existing_config(path: Path) -> list[str]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return ["- Existing config is not valid JSON; raw file will be backed up if you continue."]
+
+    inbounds = data.get("inbounds") or []
+    if not inbounds:
+        return ["- Existing config has no inbound entries."]
+    inbound = inbounds[0]
+    clients = ((inbound.get("settings") or {}).get("clients") or [{}])
+    client = clients[0] if clients else {}
+    reality = ((inbound.get("streamSettings") or {}).get("realitySettings") or {})
+    server_names = reality.get("serverNames") or []
+    short_ids = reality.get("shortIds") or []
+    return [
+        f"- Protocol: {inbound.get('protocol', '<unknown>')}",
+        f"- Port: {inbound.get('port', '<unknown>')}",
+        f"- UUID: {client.get('id', '<unknown>')}",
+        f"- Flow: {client.get('flow', '<unknown>')}",
+        f"- TLS: {(inbound.get('streamSettings') or {}).get('security', '<unknown>')}",
+        f"- SNI: {server_names[0] if server_names else '<unknown>'}",
+        f"- Dest: {reality.get('dest', '<unknown>')}",
+        f"- ShortId: {short_ids[0] if short_ids else '<unknown>'}",
+    ]
+
+
+def handle_existing_config(path: Path, *, dry_run: bool, assume_yes: bool) -> None:
+    if not path.exists():
+        return
+    if path.stat().st_size == 0:
+        return
+
+    print(f"[warn] existing config detected: {path}")
+    print("[info] current config summary:")
+    for line in summarize_existing_config(path):
+        print(line)
+    print("[warn] continuing will invalidate the previous config for clients.")
+    print(
+        f"[info] if you continue, a backup will be created at: {path.name}.<yymmdd-hhmmss>"
+    )
+
+    if dry_run:
+        print("[dry-run] existing config check completed; no prompt and no backup created")
+        return
+
+    if not assume_yes:
+        answer = input("Continue and overwrite config? [y/N]: ").strip().lower()
+        if answer not in {"y", "yes"}:
+            raise DeploymentError("aborted by user; existing config kept")
+
+    timestamp = datetime.now().strftime("%y%m%d-%H%M%S")
+    backup_path = path.with_name(f"{path.name}.{timestamp}")
+    shutil.copy2(path, backup_path)
+    print(f"[info] backup created: {backup_path}")
+
+
 def print_client_profile(
     *,
     server_ip: str,
@@ -380,6 +439,7 @@ def deploy(args) -> None:
         dest=args.dest,
     )
     config_path = Path(args.config_path)
+    handle_existing_config(config_path, dry_run=args.dry_run, assume_yes=args.yes)
     write_config(config_path, config, args.dry_run)
 
     if args.print_config:
@@ -449,6 +509,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument("--dry-run", action="store_true", help="print actions only")
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="assume yes for overwrite prompt when existing config is found",
+    )
     parser.add_argument("--verbose", action="store_true", help="print command execution details")
     parser.add_argument("--print-config", action="store_true", help="print generated config")
     return parser

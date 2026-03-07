@@ -1,6 +1,10 @@
 import io
+import json
+import tempfile
 import unittest
 from contextlib import redirect_stdout
+from pathlib import Path
+from unittest.mock import patch
 
 from reality_installer import (
     CommandResult,
@@ -12,6 +16,7 @@ from reality_installer import (
     get_sysctl_apply_command,
     get_sysctl_path,
     get_upgrade_commands,
+    handle_existing_config,
     parse_os_release_text,
     parse_x25519_output,
     print_client_profile,
@@ -167,6 +172,30 @@ class ParserTests(unittest.TestCase):
     def test_parser_accepts_verbose_flag(self):
         args = build_parser().parse_args(["--verbose"])
         self.assertTrue(args.verbose)
+
+
+class ExistingConfigHandlingTests(unittest.TestCase):
+    def test_handle_existing_config_abort_when_user_declines(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.json"
+            config_path.write_text('{"inbounds":[{"port":443}]}', encoding="utf-8")
+            with patch("builtins.input", return_value="n"):
+                with self.assertRaisesRegex(DeploymentError, r"aborted by user"):
+                    handle_existing_config(config_path, dry_run=False, assume_yes=False)
+            backups = list(Path(tmpdir).glob("config.json.*"))
+            self.assertEqual(backups, [])
+
+    def test_handle_existing_config_backup_when_user_accepts(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.json"
+            original = {"inbounds": [{"port": 443}]}
+            config_path.write_text(json.dumps(original), encoding="utf-8")
+            with patch("builtins.input", return_value="y"):
+                handle_existing_config(config_path, dry_run=False, assume_yes=False)
+            backups = list(Path(tmpdir).glob("config.json.*"))
+            self.assertEqual(len(backups), 1)
+            backup_content = json.loads(backups[0].read_text(encoding="utf-8"))
+            self.assertEqual(backup_content["inbounds"][0]["port"], 443)
 
 
 if __name__ == "__main__":
