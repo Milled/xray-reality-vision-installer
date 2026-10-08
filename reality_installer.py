@@ -145,12 +145,21 @@ def parse_x25519_output(text: str) -> dict[str, str]:
     for line in text.splitlines():
         if ":" not in line:
             continue
+
         key, value = [p.strip() for p in line.split(":", 1)]
         key_norm = key.lower().replace(" ", "")
 
-        if key_norm in {"privatekey", "private"}:
+        # 匹配 PrivateKey / Private
+        if key_norm in {"privatekey", "private"} or "privatekey" in key_norm:
             private_key = value
-        elif key_norm in {"publickey", "password", "public"}:
+
+        # 匹配 PublicKey / Password / Public
+        # 同时兼容 "Password (PublicKey)" 这种格式
+        elif (
+            key_norm in {"publickey", "password", "public"}
+            or "publickey" in key_norm
+            or "password" in key_norm
+        ):
             public_key = value
 
     if not private_key or not public_key:
