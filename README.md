@@ -57,7 +57,7 @@ sudo python3 reality_installer.py --distro-id arch --distro-like ""
 ## 一键安装（curl | python3）
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/cholf5/xray-reality-vision-installer/main/reality_installer.py | sudo python3 -
+curl -fsSL https://raw.githubusercontent.com/Milled/xray-reality-vision-installer/main/reality_installer.py | sudo python3 -
 ```
 
 带参数示例：
