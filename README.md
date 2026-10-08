@@ -5,7 +5,7 @@ Python3 自动化部署脚本，用于在 Linux VPS 上一键搭建 `VLESS + Rea
 一键安装命令：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/cholf5/xray-reality-vision-installer/main/reality_installer.py | sudo python3 -
+curl -fsSL https://raw.githubusercontent.com/Milled/xray-reality-vision-installer/main/reality_installer.py | sudo python3 -
 ```
 
 ## 功能
@@ -63,7 +63,7 @@ curl -fsSL https://raw.githubusercontent.com/Milled/xray-reality-vision-installe
 带参数示例：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/cholf5/xray-reality-vision-installer/main/reality_installer.py | \
+curl -fsSL https://raw.githubusercontent.com/Milled/xray-reality-vision-installer/main/reality_installer.py | \
   sudo python3 - --server-name www.microsoft.com --port 443 --skip-upgrade
 ```
 
